@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#1a1a2e">
+    <title>Tap Ball Rush - Avoid Obstacles Game</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+            overflow: hidden;
+            position: fixed;
+            width: 100%;
+            height: 100%;
+        }
+        * {
+            -webkit-tap-highlight-color: transparent;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const TapBallGame = () => {
+          const canvasRef = useRef(null);
+          const [gameState, setGameState] = useState('menu');
+          const [level, setLevel] = useState(1);
+          const [score, setScore] = useState(0);
+          const [highScore, setHighScore] = useState(0);
+          const [coins, setCoins] = useState(0);
+          const [showShop, setShowShop] = useState(false);
+          const [balls, setBalls] = useState([]);
+          const [obstacles, setObstacles] = useState([]);
+          const [targets, setTargets] = useState([]);
+          const [ownedItems, setOwnedItems] = useState({
+            balls: ['default'],
+            obstacles: ['default']
+          });
+          const [selectedItems, setSelectedItems] = useState({
+            ball: 'default',
+            obstacle: 'default'
+          });
+          const animationFrameRef = useRef(null);
+          const gameDataRef = useRef({
+            ball: null,
+            obstacles: [],
+            targets: [],
+            speed: 1
+          });
+
+          // Load saved progress on mount
+          useEffect(() => {
+            const saved = localStorage.getItem('tapBallGameProgress');
+            if (saved) {
+              const data = JSON.parse(saved);
+              setCoins(data.coins || 0);
+              setHighScore(data.highScore || 0);
+              setLevel(data.level || 1);
+              setOwnedItems(data.ownedItems || {
+                balls: ['default'],
+                obstacles: ['default']
+              });
+              setSelectedItems(data.selectedItems || {
+                ball: 'default',
+                obstacle: 'default'
+              });
+            }
+          }, []);
+
+          // Save progress whenever important state changes
+          useEffect(() => {
+            const saveData = {
+              coins,
+              highScore,
+              level,
+              ownedItems,
+              selectedItems
+            };
+            localStorage.setItem('tapBallGameProgress', JSON.stringify(saveData));
+          }, [coins, highScore, level, ownedItems, selectedItems]);
+
+          const CANVAS_WIDTH = 400;
+          const CANVAS_HEIGHT = 600;
+          const BALL_RADIUS = 15;
+          const TARGET_RADIUS = 20;
+          const OBSTACLE_WIDTH = 60;
+          const OBSTACLE_HEIGHT = 60;
+
+          // Shop items
+          const shopItems = {
+            balls: [
+              { id: 'default', name: 'Classic', color: '#4ECDC4', price: 0 },
+              { id: 'fire', name: 'Fire Ball', color: '#FF6B6B', price: 100 },
+              { id: 'electric', name: 'Electric', color: '#FFD93D', price: 150 },
+              { id: 'ice', name: 'Ice Ball', color: '#6BCF7F', price: 150 },
+              { id: 'galaxy', name: 'Galaxy', color: '#9D84B7', price: 200 },
+              { id: 'rainbow', name: 'Rainbow', color: 'rainbow', price: 300 }
+            ],
+            obstacles: [
+              { id: 'default', name: 'Classic Red', color: '#E74C3C', price: 0 },
+              { id: 'lava', name: 'Lava Block', color: '#FF5722', price: 100 },
+              { id: 'toxic', name: 'Toxic Waste', color: '#8BC34A', price: 150 },
+              { id: 'metal', name: 'Metal Box', color: '#607D8B', price: 150 },
+              { id: 'neon', name: 'Neon Hazard', color: '#E91E63', price: 200 }
+            ]
+          };
+
+          const getLevelConfig = (lvl) => {
+            const baseSpeed = 1 + (lvl - 1) * 0.2;
+            const numObstacles = Math.min(3 + (lvl - 1) * 2, 12);
+            
+            return {
+              speed: baseSpeed,
+              numObstacles
+            };
+          };
+
+          const initLevel = () => {
+            const config = getLevelConfig(level);
+            
+            const selectedBallSkin = shopItems.balls.find(b => b.id === selectedItems.ball);
+            
+            const newBall = {
+              x: CANVAS_WIDTH / 2,
+              y: CANVAS_HEIGHT - 80,
+              targetX: CANVAS_WIDTH / 2,
+              targetY: CANVAS_HEIGHT - 80,
+              color: selectedBallSkin.color,
+              speed: 0.15 * config.speed,
+              collected: false
+            };
+
+            const newObstacles = [];
+            for (let i = 0; i < config.numObstacles; i++) {
+              let validPosition = false;
+              let attempts = 0;
+              let obs = {};
+              
+              while (!validPosition && attempts < 50) {
+                obs = {
+                  x: Math.random() * (CANVAS_WIDTH - OBSTACLE_WIDTH - 20) + 10,
+                  y: Math.random() * (CANVAS_HEIGHT - OBSTACLE_HEIGHT - 150) + 50
+                };
+                
+                const distFromBall = Math.sqrt(
+                  Math.pow(obs.x + OBSTACLE_WIDTH/2 - newBall.x, 2) + 
+                  Math.pow(obs.y + OBSTACLE_HEIGHT/2 - newBall.y, 2)
+                );
+                
+                let tooClose = false;
+                for (let j = 0; j < newObstacles.length; j++) {
+                  const distFromObs = Math.sqrt(
+                    Math.pow(obs.x - newObstacles[j].x, 2) + 
+                    Math.pow(obs.y - newObstacles[j].y, 2)
+                  );
+                  if (distFromObs < 100) {
+                    tooClose = true;
+                    break;
+                  }
+                }
+                
+                if (distFromBall > 120 && !tooClose) {
+                  validPosition = true;
+                }
+                attempts++;
+              }
+              
+              if (validPosition) {
+                newObstacles.push(obs);
+              }
+            }
+
+            let target = {};
+            let validTarget = false;
+            let attempts = 0;
+            
+            while (!validTarget && attempts < 50) {
+              target = {
+                x: Math.random() * (CANVAS_WIDTH - 60) + 30,
+                y: Math.random() * (CANVAS_HEIGHT - 200) + 50,
+                color: '#FFD700'
+              };
+              
+              const distFromBall = Math.sqrt(
+                Math.pow(target.x - newBall.x, 2) + 
+                Math.pow(target.y - newBall.y, 2)
+              );
+              
+              let tooCloseToObstacle = false;
+              for (let obs of newObstacles) {
+                const dist = Math.sqrt(
+                  Math.pow(target.x - (obs.x + OBSTACLE_WIDTH/2), 2) + 
+                  Math.pow(target.y - (obs.y + OBSTACLE_HEIGHT/2), 2)
+                );
+                if (dist < 80) {
+                  tooCloseToObstacle = true;
+                  break;
+                }
+              }
+              
+              if (distFromBall > 100 && !tooCloseToObstacle) {
+                validTarget = true;
+              }
+              attempts++;
+            }
+
+            gameDataRef.current = {
+              ball: newBall,
+              obstacles: newObstacles,
+              targets: [target],
+              speed: config.speed,
+              config
+            };
+
+            setBalls([newBall]);
+            setObstacles(newObstacles);
+            setTargets([target]);
+          };
+
+          const startGame = () => {
+            setGameState('playing');
+            setScore(0);
+            initLevel();
+          };
+
+          useEffect(() => {
+            if (gameState !== 'playing') return;
+
+            const canvas = canvasRef.current;
+            const ctx = canvas.getContext('2d');
+            const config = gameDataRef.current.config;
+
+            const gameLoop = () => {
+              const now = Date.now();
+              
+              const ball = gameDataRef.current.ball;
+              const dx = ball.targetX - ball.x;
+              const dy = ball.targetY - ball.y;
+              const distance = Math.sqrt(dx * dx + dy * dy);
+              
+              if (distance > 2) {
+                ball.x += (dx / distance) * ball.speed * 10;
+                ball.y += (dy / distance) * ball.speed * 10;
+              }
+
+              let collision = false;
+              gameDataRef.current.obstacles.forEach(obs => {
+                if (ball.x > obs.x - BALL_RADIUS &&
+                    ball.x < obs.x + OBSTACLE_WIDTH + BALL_RADIUS &&
+                    ball.y > obs.y - BALL_RADIUS &&
+                    ball.y < obs.y + OBSTACLE_HEIGHT + BALL_RADIUS) {
+                  collision = true;
+                }
+              });
+
+              if (collision) {
+                setGameState('gameOver');
+                if (score > highScore) setHighScore(score);
+                return;
+              }
+
+              gameDataRef.current.targets.forEach((target) => {
+                const dx = ball.x - target.x;
+                const dy = ball.y - target.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance < BALL_RADIUS + TARGET_RADIUS) {
+                  if (!ball.collected) {
+                    ball.collected = true;
+                    setScore(s => s + level * 100);
+                    setCoins(c => c + 10);
+                    setLevel(l => l + 1);
+                    setTimeout(() => initLevel(), 500);
+                    return;
+                  }
+                }
+              });
+
+              const selectedBgSkin = '#1a1a2e';
+              ctx.fillStyle = selectedBgSkin;
+              ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+              gameDataRef.current.targets.forEach(target => {
+                ctx.fillStyle = target.color;
+                ctx.beginPath();
+                ctx.arc(target.x, target.y, TARGET_RADIUS, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.strokeStyle = target.color;
+                ctx.lineWidth = 3;
+                ctx.globalAlpha = 0.3 + Math.sin(now / 200) * 0.3;
+                ctx.beginPath();
+                ctx.arc(target.x, target.y, TARGET_RADIUS + 10, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+              });
+
+              const selectedObsSkin = shopItems.obstacles.find(o => o.id === selectedItems.obstacle);
+              gameDataRef.current.obstacles.forEach(obs => {
+                ctx.fillStyle = selectedObsSkin.color;
+                ctx.fillRect(obs.x, obs.y, OBSTACLE_WIDTH, OBSTACLE_HEIGHT);
+                
+                ctx.strokeStyle = selectedObsSkin.color;
+                ctx.globalAlpha = 0.5;
+                ctx.lineWidth = 2;
+                for (let i = 0; i < 3; i++) {
+                  ctx.beginPath();
+                  ctx.moveTo(obs.x + i * 20, obs.y);
+                  ctx.lineTo(obs.x + i * 20 + 20, obs.y + OBSTACLE_HEIGHT);
+                  ctx.stroke();
+                }
+                ctx.globalAlpha = 1;
+              });
+
+              // Draw ball shadow
+              ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+              ctx.beginPath();
+              ctx.ellipse(ball.x, ball.y + 5, BALL_RADIUS, BALL_RADIUS * 0.5, 0, 0, Math.PI * 2);
+              ctx.fill();
+              
+              // Ball with gradient or rainbow effect
+              if (ball.color === 'rainbow') {
+                const hue = (Date.now() / 10) % 360;
+                const rainbowGradient = ctx.createRadialGradient(
+                  ball.x - 5, ball.y - 5, 0,
+                  ball.x, ball.y, BALL_RADIUS
+                );
+                rainbowGradient.addColorStop(0, `hsl(${hue}, 100%, 70%)`);
+                rainbowGradient.addColorStop(1, `hsl(${(hue + 60) % 360}, 100%, 50%)`);
+                ctx.fillStyle = rainbowGradient;
+              } else {
+                const gradient = ctx.createRadialGradient(
+                  ball.x - 5, ball.y - 5, 0,
+                  ball.x, ball.y, BALL_RADIUS
+                );
+                gradient.addColorStop(0, '#ffffff');
+                gradient.addColorStop(0.3, ball.color);
+                gradient.addColorStop(1, ball.color);
+                ctx.fillStyle = gradient;
+              }
+              
+              ctx.beginPath();
+              ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI * 2);
+              ctx.fill();
+
+              setBalls([ball]);
+              setObstacles([...gameDataRef.current.obstacles]);
+              setTargets([...gameDataRef.current.targets]);
+
+              animationFrameRef.current = requestAnimationFrame(gameLoop);
+            };
+
+            gameLoop();
+
+            return () => {
+              if (animationFrameRef.current) {
+                cancelAnimationFrame(animationFrameRef.current);
+              }
+            };
+          }, [gameState, level]);
+
+          const handleCanvasClick = (e) => {
+            if (gameState !== 'playing') return;
+
+            const canvas = canvasRef.current;
+            const rect = canvas.getBoundingClientRect();
+            
+            // Support both mouse and touch events
+            let clientX, clientY;
+            if (e.type === 'touchstart' || e.type === 'touchend') {
+              e.preventDefault(); // Prevent scrolling
+              const touch = e.touches[0] || e.changedTouches[0];
+              clientX = touch.clientX;
+              clientY = touch.clientY;
+            } else {
+              clientX = e.clientX;
+              clientY = e.clientY;
+            }
+            
+            const scaleX = CANVAS_WIDTH / rect.width;
+            const scaleY = CANVAS_HEIGHT / rect.height;
+            const x = (clientX - rect.left) * scaleX;
+            const y = (clientY - rect.top) * scaleY;
+
+            gameDataRef.current.ball.targetX = x;
+            gameDataRef.current.ball.targetY = y;
+            gameDataRef.current.ball.collected = false;
+          };
+
+          const Play = () => (
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+          );
+
+          const RotateCcw = () => (
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="1 4 1 10 7 10"></polyline>
+              <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+            </svg>
+          );
+
+          const Trophy = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path>
+              <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path>
+              <path d="M4 22h16"></path>
+              <path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"></path>
+              <path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"></path>
+              <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"></path>
+            </svg>
+          );
+
+          const ShoppingBag = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path>
+              <line x1="3" y1="6" x2="21" y2="6"></line>
+              <path d="M16 10a4 4 0 0 1-8 0"></path>
+            </svg>
+          );
+
+          const Coins = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <path d="M12 6v12"></path>
+              <path d="M15 9H9.5a2.5 2.5 0 0 0 0 5h5a2.5 2.5 0 0 1 0 5H9"></path>
+            </svg>
+          );
+
+          const X = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          );
+
+          const buyItem = (category, itemId, price) => {
+            if (coins >= price && !ownedItems[category].includes(itemId)) {
+              setCoins(c => c - price);
+              setOwnedItems(prev => ({
+                ...prev,
+                [category]: [...prev[category], itemId]
+              }));
+              selectItem(category, itemId);
+            }
+          };
+
+          const selectItem = (category, itemId) => {
+            if (ownedItems[category].includes(itemId)) {
+              const key = category === 'balls' ? 'ball' : 'obstacle';
+              setSelectedItems(prev => ({
+                ...prev,
+                [key]: itemId
+              }));
+            }
+          };
+
+          const closeShop = () => {
+            setShowShop(false);
+          };
+
+          return (
+            <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 p-4">
+              <div className="bg-white rounded-lg shadow-2xl p-6 max-w-md w-full">
+                <div className="flex justify-between items-center mb-2">
+                  <button
+                    onClick={() => setShowShop(!showShop)}
+                    className="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition"
+                  >
+                    <ShoppingBag size={20} />
+                    Shop
+                  </button>
+                  <div className="bg-yellow-100 px-4 py-2 rounded-lg flex items-center gap-2">
+                    <Coins size={20} className="text-yellow-600" />
+                    <span className="text-yellow-800 font-bold">{coins}</span>
+                  </div>
+                </div>
+                
+                <h1 className="text-4xl font-bold text-center mb-2 bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">
+                  Tap Ball Rush
+                </h1>
+                <p className="text-center text-gray-600 mb-4">Tap to move, avoid obstacles!</p>
+
+                <div className="flex justify-between mb-4 text-sm">
+                  <div className="bg-purple-100 px-4 py-2 rounded-lg">
+                    <div className="text-purple-800 font-bold">Level {level}</div>
+                  </div>
+                  <div className="bg-blue-100 px-4 py-2 rounded-lg">
+                    <div className="text-blue-800 font-bold">Score: {score}</div>
+                  </div>
+                  <div className="bg-yellow-100 px-4 py-2 rounded-lg flex items-center gap-1">
+                    <Trophy size={16} />
+                    <div className="text-yellow-800 font-bold">{highScore}</div>
+                  </div>
+                </div>
+
+                <div className="relative">
+                  <canvas
+                    ref={canvasRef}
+                    width={CANVAS_WIDTH}
+                    height={CANVAS_HEIGHT}
+                    onClick={handleCanvasClick}
+                    onTouchStart={handleCanvasClick}
+                    className="border-4 border-purple-300 rounded-lg cursor-pointer w-full touch-none"
+                    style={{ maxWidth: '400px', aspectRatio: '400/600', touchAction: 'none' }}
+                  />
+
+                  {gameState === 'menu' && (
+                    <div className="absolute inset-0 bg-black bg-opacity-70 flex flex-col items-center justify-center rounded-lg">
+                      <h2 className="text-white text-3xl font-bold mb-4">Tap Ball Rush</h2>
+                      <p className="text-white text-center mb-6 px-4">
+                        Tap to move your ball to the golden target!<br/>
+                        Avoid red obstacles scattered across the screen.<br/>
+                        More obstacles appear as you level up!
+                      </p>
+                      <button
+                        onClick={startGame}
+                        className="bg-gradient-to-r from-purple-500 to-blue-500 text-white px-8 py-3 rounded-full font-bold text-xl hover:from-purple-600 hover:to-blue-600 transition flex items-center gap-2"
+                      >
+                        <Play /> Start Game
+                      </button>
+                    </div>
+                  )}
+
+                  {gameState === 'gameOver' && (
+                    <div className="absolute inset-0 bg-black bg-opacity-70 flex flex-col items-center justify-center rounded-lg">
+                      <h2 className="text-white text-4xl font-bold mb-2">Game Over!</h2>
+                      <p className="text-white text-2xl mb-2">Level {level}</p>
+                      <p className="text-yellow-300 text-xl mb-6">Score: {score}</p>
+                      {score === highScore && score > 0 && (
+                        <p className="text-yellow-400 text-lg mb-4 flex items-center gap-2">
+                          <Trophy size={20} /> New High Score!
+                        </p>
+                      )}
+                      <button
+                        onClick={startGame}
+                        className="bg-gradient-to-r from-green-500 to-blue-500 text-white px-8 py-3 rounded-full font-bold text-xl hover:from-green-600 hover:to-blue-600 transition flex items-center gap-2"
+                      >
+                        <RotateCcw /> Play Again
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Shop Modal */}
+                {showShop && (
+                  <div 
+                    className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4" 
+                    style={{ position: 'fixed', zIndex: 9999 }}
+                    onClick={closeShop}
+                  >
+                    <div className="bg-white rounded-lg max-w-md w-full max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+                      <div className="sticky top-0 bg-white border-b p-4 flex justify-between items-center z-10">
+                        <h2 className="text-2xl font-bold text-purple-600">Shop</h2>
+                        <button
+                          onClick={closeShop}
+                          className="text-gray-500 hover:text-gray-700 p-2 hover:bg-gray-100 rounded transition"
+                          type="button"
+                          style={{ cursor: 'pointer' }}
+                        >
+                          <X size={24} />
+                        </button>
+                      </div>
+                      
+                      <div className="p-4">
+                        {/* Coins Display */}
+                        <div className="bg-yellow-50 border-2 border-yellow-400 rounded-lg p-3 mb-4 flex items-center justify-center gap-2">
+                          <Coins size={24} className="text-yellow-600" />
+                          <span className="text-2xl font-bold text-yellow-800">{coins} Coins</span>
+                        </div>
+
+                        {/* Balls Section */}
+                        <div className="mb-6">
+                          <h3 className="text-xl font-bold text-gray-800 mb-3">Ball Skins</h3>
+                          <div className="grid grid-cols-2 gap-3">
+                            {shopItems.balls.map(item => {
+                              const owned = ownedItems.balls.includes(item.id);
+                              const selected = selectedItems.ball === item.id;
+                              return (
+                                <div
+                                  key={item.id}
+                                  className={`border-2 rounded-lg p-3 ${
+                                    selected ? 'border-green-500 bg-green-50' : 'border-gray-300'
+                                  }`}
+                                >
+                                  <div className="flex justify-center mb-2">
+                                    <div
+                                      className="w-12 h-12 rounded-full"
+                                      style={{
+                                        background: item.color === 'rainbow'
+                                          ? 'linear-gradient(45deg, #FF6B6B, #FFD93D, #6BCF7F, #4ECDC4, #9D84B7)'
+                                          : item.color
+                                      }}
+                                    ></div>
+                                  </div>
+                                  <p className="text-sm font-bold text-center mb-1">{item.name}</p>
+                                  {!owned ? (
+                                    <button
+                                      onClick={() => buyItem('balls', item.id, item.price)}
+                                      disabled={coins < item.price}
+                                      className={`w-full text-xs py-1 rounded flex items-center justify-center gap-1 ${
+                                        coins >= item.price
+                                          ? 'bg-yellow-500 hover:bg-yellow-600 text-white'
+                                          : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                                      }`}
+                                    >
+                                      <Coins size={12} /> {item.price}
+                                    </button>
+                                  ) : selected ? (
+                                    <div className="w-full text-xs py-1 bg-green-500 text-white rounded text-center font-bold">
+                                      EQUIPPED
+                                    </div>
+                                  ) : (
+                                    <button
+                                      onClick={() => selectItem('balls', item.id)}
+                                      className="w-full text-xs py-1 bg-blue-500 hover:bg-blue-600 text-white rounded"
+                                    >
+                                      Equip
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Obstacles Section */}
+                        <div className="mb-6">
+                          <h3 className="text-xl font-bold text-gray-800 mb-3">Obstacle Skins</h3>
+                          <div className="grid grid-cols-2 gap-3">
+                            {shopItems.obstacles.map(item => {
+                              const owned = ownedItems.obstacles.includes(item.id);
+                              const selected = selectedItems.obstacle === item.id;
+                              return (
+                                <div
+                                  key={item.id}
+                                  className={`border-2 rounded-lg p-3 ${
+                                    selected ? 'border-green-500 bg-green-50' : 'border-gray-300'
+                                  }`}
+                                >
+                                  <div className="flex justify-center mb-2">
+                                    <div
+                                      className="w-12 h-12 rounded"
+                                      style={{ background: item.color }}
+                                    ></div>
+                                  </div>
+                                  <p className="text-sm font-bold text-center mb-1">{item.name}</p>
+                                  {!owned ? (
+                                    <button
+                                      onClick={() => buyItem('obstacles', item.id, item.price)}
+                                      disabled={coins < item.price}
+                                      className={`w-full text-xs py-1 rounded flex items-center justify-center gap-1 ${
+                                        coins >= item.price
+                                          ? 'bg-yellow-500 hover:bg-yellow-600 text-white'
+                                          : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                                      }`}
+                                    >
+                                      <Coins size={12} /> {item.price}
+                                    </button>
+                                  ) : selected ? (
+                                    <div className="w-full text-xs py-1 bg-green-500 text-white rounded text-center font-bold">
+                                      EQUIPPED
+                                    </div>
+                                  ) : (
+                                    <button
+                                      onClick={() => selectItem('obstacles', item.id)}
+                                      className="w-full text-xs py-1 bg-blue-500 hover:bg-blue-600 text-white rounded"
+                                    >
+                                      Equip
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="mt-4 bg-gray-50 rounded-lg p-4">
+                  <h3 className="font-bold text-gray-800 mb-2">How to Play:</h3>
+                  <ul className="text-sm text-gray-600 space-y-1">
+                    <li>• Tap anywhere to move your ball to that position</li>
+                    <li>• Reach the golden target to complete the level</li>
+                    <li>• Avoid touching red obstacles or you lose!</li>
+                    <li>• Earn coins to unlock cool skins in the Shop!</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<TapBallGame />);
+    </script>
+</body>
+</html>
